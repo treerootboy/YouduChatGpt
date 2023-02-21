@@ -38,3 +38,4 @@ docker compose up -d
 ## TODO
 - [x] 增加AI回答等待时的提示语
 - [ ] 解决重复回调问题
+- [ ] 解决日志无法重定向到 docker logs

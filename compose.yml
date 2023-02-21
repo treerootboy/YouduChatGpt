@@ -1,7 +1,8 @@
 version: '3'
 
 services:
-  youduchatgpt:
+  youduchatgpt-dev:
+    profiles: [ "dev" ]
     build:
       context: .
     env_file:
@@ -10,3 +11,10 @@ services:
       - ${PORT}:${PORT}
     volumes:
       - ./:/www:ro
+  youduchatgpt-pub:
+    profiles: [ "pub" ]
+    image: treerootboy/youduchatgpt
+    env_file:
+      - .env
+    ports:
+      - ${PORT}:${PORT}
