@@ -1,0 +1,6 @@
+pycryptodome
+requests
+requests_toolbelt
+aiohttp
+revChatGPT
+openai

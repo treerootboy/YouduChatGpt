@@ -1,0 +1,12 @@
+version: '3'
+
+services:
+  youduchatgpt:
+    build:
+      context: .
+    env_file:
+      - .env
+    ports:
+      - ${PORT}:${PORT}
+    volumes:
+      - ./:/www:ro
