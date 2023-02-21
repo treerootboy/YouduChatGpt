@@ -28,14 +28,20 @@
 | THINKING_TEXT |  | 等待 openai 答案时的提示语，为空则不提示 |
 
 
-### Docker Compose 启动
+### 启动
 ```bash
-docker compose up -d
+# 开发环境
+docker compose --profile dev up -d
+```
+
+```bash
+# 运行环境
+docker compose --profile pub up -d
 ```
 
 访问 http://localhost:8001/msg/receive 后返回 { errorcode:0 }
 
 ## TODO
 - [x] 增加AI回答等待时的提示语
-- [ ] 解决重复回调问题
+- [x] 解决重复回调问题
 - [ ] 解决日志无法重定向到 docker logs

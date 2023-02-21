@@ -103,7 +103,7 @@ async def receive_msg(req):
     elif msg.msg_type == MESSAGE_TYPE_FILE:
         client.download_file(msg.msg_body.to_file_body().media_id, YOUDU_DOWNLOAD_DIR)
     else:
-        if msg.from_user and msg.create_time > time.time() - 60:
+        if msg.from_user and msg.create_time > time.time() - 15:
             if THINKING_TEXT:
                 await chatgpt_thinking(msg)
             if OPENAI_ENGINE == 'chatgpt' :
@@ -178,9 +178,7 @@ async def errorHandler(request, handler):
     except Exception as e:
         print(e)
         pass
-    return web.json_response({
-        "errcode": 0
-    })
+    return web.json_response({'errcode': 0, 'errmsg': 'ok', 'encrypt': None})
 
 # 创建服务
 def init_server():
