@@ -38,6 +38,7 @@ OPENAI_EMAIL = os.getenv('OPENAI_EMAIL')
 OPENAI_PWD = os.getenv('OPENAI_PWD')
 OPENAI_KEY = os.getenv('OPENAI_KEY')
 OPENAI_ENGINE = os.getenv('OPENAI_ENGINE') or 'text-davinci-003'
+THINKING_TEXT = os.getenv('THINKING_TEXT')
 
 
 
@@ -103,7 +104,8 @@ async def receive_msg(req):
         client.download_file(msg.msg_body.to_file_body().media_id, YOUDU_DOWNLOAD_DIR)
     else:
         if msg.from_user and msg.create_time > time.time() - 60:
-            await chatgpt_thinking(msg)
+            if THINKING_TEXT:
+                await chatgpt_thinking(msg)
             if OPENAI_ENGINE == 'chatgpt' :
                 await chatgpt_api(msg)
             else:
