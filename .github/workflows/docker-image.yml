@@ -23,7 +23,7 @@ jobs:
         uses: docker/metadata-action@v4
         with:
           images: |
-            name/app
+            ${{ secrets.DOCKERHUB_USERNAME }}/youduchatgpt
           tags: |
             type=ref,event=branch
             type=ref,event=pr
