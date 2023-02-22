@@ -168,6 +168,7 @@ async def chatgpt_api(msg):
     isAIError = (
                     completion.find('Field missing.')!=-1
                     and completion.find('SSLError')!=-1
+                    and completion.find('timed out')!=-1
                 )
     if isAIError:
         createChatGptSession(msg.from_user, force=True)
