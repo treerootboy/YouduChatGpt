@@ -40,8 +40,3 @@ docker compose --profile pub up -d
 ```
 
 访问 http://localhost:8001/msg/receive 后返回 { errorcode:0 }
-
-## TODO
-- [x] 增加AI回答等待时的提示语
-- [x] 解决重复回调问题
-- [ ] 解决日志无法重定向到 docker logs
