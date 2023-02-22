@@ -129,18 +129,49 @@ async def chatgpt_thinking(msg):
 chatgpt 回复
 """
 from revChatGPT.V1 import Chatbot
-chatbot = Chatbot(config={
-  "email": OPENAI_EMAIL,
-  "password": OPENAI_PWD
-})
+users = {}
+pools = []
+def createChatGptSession(user, force=False):
+    global pools
+    global users
+    print(pools)
+    chatbot = users.get(user)
+    if not chatbot or force==True:
+        print('creating chatbot session for %s' % user)
+        chatbot = Chatbot(config={
+        "email": OPENAI_EMAIL,
+        "password": OPENAI_PWD
+        })
+        if chatbot:
+            users[user] = chatbot
+            pools.append(user)
+            poolen = len(pools)
+            if poolen > 10:
+                removes = pools[:10-poolen]
+                for i in removes:
+                    users.pop(i)
+                pools = pools[-10:]
+        print('chatbot session for %s created' % user)     
+    return chatbot
+
+
             
 async def chatgpt_api(msg):
+    chatbot = createChatGptSession(msg.from_user)
     print("Chatbot: ")
     completion = ""
     for data in chatbot.ask(
         msg.msg_body.content
     ):
         completion = data["message"]
+    
+    isAIError = (
+                    completion.find('Field missing.')!=-1
+                    and completion.find('SSLError')!=-1
+                )
+    if isAIError:
+        createChatGptSession(msg.from_user, force=True)
+    
     client.send_msg(Message(
         msg.from_user, 
         MESSAGE_TYPE_TEXT, 
