@@ -3,4 +3,4 @@ requests
 requests_toolbelt
 aiohttp
 revChatGPT
-openai
+openai==0.27.0
