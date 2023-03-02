@@ -129,41 +129,74 @@ async def chatgpt_thinking(msg):
 chatgpt 回复
 """
 from revChatGPT.V1 import Chatbot
-users = {}
-pools = []
-def createChatGptSession(user, force=False):
-    global pools
-    global users
-    print(pools)
-    chatbot = users.get(user)
-    if not chatbot or force==True:
-        print('creating chatbot session for %s' % user)
-        chatbot = Chatbot(config={
-        "email": OPENAI_EMAIL,
-        "password": OPENAI_PWD
+
+
+"""
+会话池，用于存储会话集合，限定会话数量，按LRU算法剔除会话
+已用户ID为会话key，会话对象为value
+提供获取会话和存储会话的方法
+存储会话时检查会话数量，并按LRU算法剔除会话
+提供单例模式
+"""
+class ChatPool:
+    MAX_SIZE = 50
+    def __init__(self, max_size=10):
+        self.max_size = max_size
+        self.sessions = {}
+        self.lru = []
+    
+    def _get(self, key):
+        if key in self.sessions:
+            self.lru.remove(key)
+            self.lru.append(key)
+            return self.sessions[key]
+        return None
+    
+    def _set(self, key, value):
+        if key in self.sessions:
+            self.lru.remove(key)
+        elif len(self.sessions) >= self.max_size:
+            del self.sessions[self.lru[0]]
+            self.lru = self.lru[1:]
+        self.sessions[key] = value
+        self.lru.append(key)
+    
+    @classmethod
+    def instance(cls):
+        if not hasattr(cls, '_instance'):
+            cls._instance = cls(cls.MAX_SIZE)
+        return cls._instance
+    
+    @classmethod
+    def get(cls, key):
+        return cls.instance()._get(key)
+    
+    @classmethod
+    def set(cls, key, value):
+        return cls.instance()._set(key, value)
+
+def create_chat(user, force=0):
+    chat = ChatPool.get(user)
+    if chat is None or force==1:
+        chat = Chatbot(config={
+            "email": OPENAI_EMAIL,
+            "password": OPENAI_PWD
         })
-        if chatbot:
-            users[user] = chatbot
-            pools.append(user)
-            poolen = len(pools)
-            if poolen > 10:
-                removes = pools[:10-poolen]
-                for i in removes:
-                    users.pop(i)
-                pools = pools[-10:]
-        print('chatbot session for %s created' % user)     
-    return chatbot
+        ChatPool.set(user, chat)
+    return chat
 
-
-            
-async def chatgpt_api(msg):
-    chatbot = createChatGptSession(msg.from_user)
-    print("Chatbot: ")
+async def getCompletion(chatbot, message):
     completion = ""
     for data in chatbot.ask(
-        msg.msg_body.content
+        message
     ):
         completion = data["message"]
+    return completion
+            
+async def chatgpt_api(msg):
+    chatbot = create_chat(msg.from_user)
+    print("Chatbot: ")
+    completion = await getCompletion(chatbot, msg.msg_body.content)
     
     isAIError = (
                     completion.find('Field missing.')!=-1
@@ -171,7 +204,13 @@ async def chatgpt_api(msg):
                     and completion.find('timed out')!=-1
                 )
     if isAIError:
-        createChatGptSession(msg.from_user, force=True)
+        client.send_msg(Message(
+            msg.from_user, 
+            MESSAGE_TYPE_TEXT, 
+            TextBody("发生错误正在重试...")
+        ))
+        chatbot = create_chat(msg.from_user, force=1)
+        completion = await getCompletion(chatbot, msg.msg_body.content)
     
     client.send_msg(Message(
         msg.from_user, 
