@@ -39,6 +39,7 @@ OPENAI_PWD = os.getenv('OPENAI_PWD')
 OPENAI_KEY = os.getenv('OPENAI_KEY')
 OPENAI_ENGINE = os.getenv('OPENAI_ENGINE') or 'text-davinci-003'
 THINKING_TEXT = os.getenv('THINKING_TEXT')
+CHATGPT_PROXY = os.getenv('CHATGPT_PROXY')
 
 
 
@@ -106,12 +107,21 @@ async def receive_msg(req):
         if msg.from_user and msg.create_time > time.time() - 15:
             if THINKING_TEXT:
                 await chatgpt_thinking(msg)
-            if OPENAI_ENGINE == 'chatgpt' :
-                await chatgpt_api(msg)
-            else:
-                await openai_api(msg)
+            try:
+                if OPENAI_ENGINE == 'chatgpt' :
+                    await chatgpt_api(msg)
+                else:
+                    await openai_api(msg)
+            except Exception as e:
+                alert_user_error(msg, e)
                 
-            # pass
+def alert_user_error(msg, e):
+    client.send_msg(Message(
+        msg.from_user, 
+        MESSAGE_TYPE_TEXT, 
+        TextBody('''openai api 发生错误: 
+%s''' %  e))
+    )
             
             
 """
@@ -125,100 +135,6 @@ async def chatgpt_thinking(msg):
     )
 
 
-"""
-chatgpt 回复
-"""
-from revChatGPT.V1 import Chatbot
-
-
-"""
-会话池，用于存储会话集合，限定会话数量，按LRU算法剔除会话
-已用户ID为会话key，会话对象为value
-提供获取会话和存储会话的方法
-存储会话时检查会话数量，并按LRU算法剔除会话
-提供单例模式
-"""
-class ChatPool:
-    MAX_SIZE = 50
-    def __init__(self, max_size=10):
-        self.max_size = max_size
-        self.sessions = {}
-        self.lru = []
-    
-    def _get(self, key):
-        if key in self.sessions:
-            self.lru.remove(key)
-            self.lru.append(key)
-            return self.sessions[key]
-        return None
-    
-    def _set(self, key, value):
-        if key in self.sessions:
-            self.lru.remove(key)
-        elif len(self.sessions) >= self.max_size:
-            del self.sessions[self.lru[0]]
-            self.lru = self.lru[1:]
-        self.sessions[key] = value
-        self.lru.append(key)
-    
-    @classmethod
-    def instance(cls):
-        if not hasattr(cls, '_instance'):
-            cls._instance = cls(cls.MAX_SIZE)
-        return cls._instance
-    
-    @classmethod
-    def get(cls, key):
-        return cls.instance()._get(key)
-    
-    @classmethod
-    def set(cls, key, value):
-        return cls.instance()._set(key, value)
-
-def create_chat(user, force=0):
-    chat = ChatPool.get(user)
-    if chat is None or force==1:
-        chat = Chatbot(config={
-            "email": OPENAI_EMAIL,
-            "password": OPENAI_PWD
-        })
-        ChatPool.set(user, chat)
-    return chat
-
-async def getCompletion(chatbot, message):
-    completion = ""
-    for data in chatbot.ask(
-        message
-    ):
-        completion = data["message"]
-    return completion
-            
-async def chatgpt_api(msg):
-    chatbot = create_chat(msg.from_user)
-    print("Chatbot: ")
-    completion = await getCompletion(chatbot, msg.msg_body.content)
-    
-    isAIError = (
-                    completion.find('Field missing.')!=-1
-                    and completion.find('SSLError')!=-1
-                    and completion.find('timed out')!=-1
-                )
-    if isAIError:
-        client.send_msg(Message(
-            msg.from_user, 
-            MESSAGE_TYPE_TEXT, 
-            TextBody("发生错误正在重试...")
-        ))
-        chatbot = create_chat(msg.from_user, force=1)
-        completion = await getCompletion(chatbot, msg.msg_body.content)
-    
-    client.send_msg(Message(
-        msg.from_user, 
-        MESSAGE_TYPE_TEXT, 
-        TextBody(str(completion).lstrip()))
-    )
-    print(completion)
-    
 
 """
 openai api 回复
@@ -235,7 +151,71 @@ async def openai_api(msg):
     print(completion)
     client.send_msg(Message(msg.from_user, MESSAGE_TYPE_TEXT, chatResponse))
     await openai.aiosession.get().close()
+    
+class UserSession:
+    def __init__(self, user):
+        self.user = user
+        self.conversation = []
+        self.createtime = time.time()
 
+    async def chat(self, text):
+        print('会话[', self.user ,']询问:', text)
+        self.conversation.append({
+            'role':'user',
+            'content':text
+        })
+        completion = await openai.ChatCompletion.acreate(
+            model="gpt-3.5-turbo",
+            messages=self.conversation
+        )
+        print('gpt是否有返回？', completion is None)
+        self.conversation.append(completion.choices[0].message)
+        print('会话[', self.user ,']回答:', completion.choices[0].message.content)
+        return completion.choices[0].message.content
+
+    @classmethod
+    def get(cls, user):
+        return SessionCollection.getInstance().get(user)
+        
+
+class SessionCollection(dict):
+    def __init__(self):
+        super().__init__()
+        
+    def get(self, user, default=None):
+        try:
+            if user not in self \
+            or time.time() - self[user].createtime > 86400:
+                print('创建用户:', user)
+                self[user] = UserSession(user)
+                print('创建用户成功', user)
+            
+            return self[user]
+        except Exception:
+            pass
+        
+        return default
+
+    @classmethod
+    def getInstance(cls):
+        if not hasattr(cls, "_instance"):
+            cls._instance = cls()
+        return cls._instance
+    
+
+
+"""
+chatgpt 回复
+"""
+async def chatgpt_api(msg):
+    session = UserSession.get(msg.from_user)
+    print(session)
+    completion = await session.chat(msg.msg_body.content)
+    client.send_msg(Message(
+        msg.from_user, 
+        MESSAGE_TYPE_TEXT, 
+        TextBody(str(completion).lstrip()))
+    )
 
 
 """
