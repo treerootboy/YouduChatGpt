@@ -1,11 +1,4 @@
 # -*- coding: utf-8 -*-
-
-"""
-回调模式示例，简单企业应用示例
-!!需要用python3.5+运行!!
-"""
-
-
 from aiohttp import web, ClientSession
 from urllib.parse import parse_qsl
 
@@ -40,6 +33,7 @@ OPENAI_KEY = os.getenv('OPENAI_KEY')
 OPENAI_ENGINE = os.getenv('OPENAI_ENGINE') or 'text-davinci-003'
 THINKING_TEXT = os.getenv('THINKING_TEXT')
 CHATGPT_PROXY = os.getenv('CHATGPT_PROXY')
+SESSION_TIMEOUT = int(os.getenv('SESSION_TIMEOUT') or 0) or 60 * 60 * 3
 
 
 
@@ -114,6 +108,7 @@ async def receive_msg(req):
                     await openai_api(msg)
             except Exception as e:
                 alert_user_error(msg, e)
+                raise e
                 
 def alert_user_error(msg, e):
     client.send_msg(Message(
@@ -164,6 +159,7 @@ class UserSession:
             'role':'user',
             'content':text
         })
+        self.createtime = time.time()
         completion = await openai.ChatCompletion.acreate(
             model="gpt-3.5-turbo",
             messages=self.conversation
@@ -172,6 +168,10 @@ class UserSession:
         self.conversation.append(completion.choices[0].message)
         print('会话[', self.user ,']回答:', completion.choices[0].message.content)
         return completion.choices[0].message.content
+    
+    def reset():
+        self.conversation = []
+        self.createtime = time.time()
 
     @classmethod
     def get(cls, user):
@@ -185,7 +185,7 @@ class SessionCollection(dict):
     def get(self, user, default=None):
         try:
             if user not in self \
-            or time.time() - self[user].createtime > 86400:
+            or time.time() - self[user].createtime > SESSION_TIMEOUT:
                 print('创建用户:', user)
                 self[user] = UserSession(user)
                 print('创建用户成功', user)
@@ -210,13 +210,23 @@ chatgpt 回复
 async def chatgpt_api(msg):
     session = UserSession.get(msg.from_user)
     print(session)
-    completion = await session.chat(msg.msg_body.content)
-    client.send_msg(Message(
-        msg.from_user, 
-        MESSAGE_TYPE_TEXT, 
-        TextBody(str(completion).lstrip()))
-    )
-
+    try:
+        completion = await session.chat(msg.msg_body.content)
+        client.send_msg(Message(
+            msg.from_user, 
+            MESSAGE_TYPE_TEXT, 
+            TextBody(str(completion).lstrip()))
+        )
+    except openai.error.OpenAIError as e:
+        if str(e).find('maximum context length') > -1:
+            session.reset()
+            client.send_msg(Message(
+                msg.from_user, 
+                MESSAGE_TYPE_TEXT, 
+                '会话超过最大token数，已重置会话，请重新提问')
+            )
+        else:
+            raise e
 
 """
 aiohttp web 服务
