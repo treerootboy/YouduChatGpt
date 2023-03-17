@@ -169,7 +169,7 @@ class UserSession:
         print('会话[', self.user ,']回答:', completion.choices[0].message.content)
         return completion.choices[0].message.content
     
-    def reset():
+    def reset(self):
         self.conversation = []
         self.createtime = time.time()
 
