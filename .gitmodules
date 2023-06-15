@@ -1,0 +1,3 @@
+[submodule "plugins/auditscript"]
+	path = plugins/auditscript
+	url = https://code.addcn.com/10232/auditscript.git

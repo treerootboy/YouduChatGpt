@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import traceback
 from aiohttp import web, ClientSession
 from urllib.parse import parse_qsl
 
@@ -10,6 +11,9 @@ from entapp.utils import *
 import time
 import os
 
+from environs import Env
+env = Env()
+env.read_env()
 
 """
 环境变量
@@ -17,23 +21,23 @@ import os
 for key, value in os.environ.items():
     print(f"{key}={value}")
 
-PORT = int(os.getenv('PORT')) or 8001
-RECEIVE_MSG_API = os.getenv('RECEIVE_MSG_API') or '/msg/receive'
+PORT = env.int('PORT', 8080)
+RECEIVE_MSG_API = env.str('RECEIVE_MSG_API', '/receive_msg')
 
-YOUDU_BUIN = int(os.getenv('YOUDU_BUIN'))
-YOUDU_APP_ID = os.getenv('YOUDU_APP_ID')
-YOUDU_AES_KEY = os.getenv('YOUDU_AES_KEY')
-YOUDU_CALLBACK_TOKEN = os.getenv('YOUDU_CALLBACK_TOKEN') 
-YOUDU_ADDRESS = os.getenv('YOUDU_ADDRESS') or '192.168.8.180:7080'
-YOUDU_DOWNLOAD_DIR = os.getenv('YOUDU_DOWNLOAD_DIR') 
+YOUDU_BUIN = env.int('YOUDU_BUIN')
+YOUDU_APP_ID = env.str('YOUDU_APP_ID')
+YOUDU_AES_KEY = env.str('YOUDU_AES_KEY')
+YOUDU_CALLBACK_TOKEN = env.str('YOUDU_CALLBACK_TOKEN')
+YOUDU_ADDRESS = env.str('YOUDU_ADDRESS', '192.168.8.180:7080')
+YOUDU_DOWNLOAD_DIR = env.str('YOUDU_DOWNLOAD_DIR', './download')
 
-OPENAI_EMAIL = os.getenv('OPENAI_EMAIL')
-OPENAI_PWD = os.getenv('OPENAI_PWD')
-OPENAI_KEY = os.getenv('OPENAI_KEY')
-OPENAI_ENGINE = os.getenv('OPENAI_ENGINE') or 'text-davinci-003'
-THINKING_TEXT = os.getenv('THINKING_TEXT')
-CHATGPT_PROXY = os.getenv('CHATGPT_PROXY')
-SESSION_TIMEOUT = int(os.getenv('SESSION_TIMEOUT') or 0) or 60 * 60 * 3
+OPENAI_EMAIL = env.str('OPENAI_EMAIL')
+OPENAI_PWD = env.str('OPENAI_PWD')
+OPENAI_KEY = env.str('OPENAI_KEY')
+OPENAI_ENGINE = env.str('OPENAI_ENGINE', 'text-davinci-003')
+THINKING_TEXT = env.str('THINKING_TEXT', '思考中...')
+CHATGPT_PROXY = env.str('CHATGPT_PROXY', None)
+SESSION_TIMEOUT = env.int('SESSION_TIMEOUT', 60 * 60 * 3)
 
 
 
@@ -99,16 +103,22 @@ async def receive_msg(req):
         client.download_file(msg.msg_body.to_file_body().media_id, YOUDU_DOWNLOAD_DIR)
     else:
         if msg.from_user and msg.create_time > time.time() - 15:
-            if THINKING_TEXT:
-                await chatgpt_thinking(msg)
-            try:
-                if OPENAI_ENGINE == 'chatgpt' :
-                    await chatgpt_api(msg)
-                else:
-                    await openai_api(msg)
-            except Exception as e:
-                alert_user_error(msg, e)
-                raise e
+            if msg.msg_body.content == '/reset':
+                reset_session(msg)
+            else:    
+                await handle_chat(msg)
+
+async def handle_chat(msg):
+    if THINKING_TEXT:
+        await chatgpt_thinking(msg)
+    try:
+        if OPENAI_ENGINE == 'chatgpt' :
+            await chatgpt_api(msg)
+        else:
+            await openai_api(msg)
+    except Exception as e:
+        alert_user_error(msg, e)
+        raise e
                 
 def alert_user_error(msg, e):
     client.send_msg(Message(
@@ -117,7 +127,15 @@ def alert_user_error(msg, e):
         TextBody('''openai api 发生错误: 
 %s''' %  e))
     )
-            
+
+def reset_session(msg):
+    session = UserSession.get(msg.from_user)
+    session.reset()
+    client.send_msg(Message(
+        msg.from_user, 
+        MESSAGE_TYPE_TEXT, 
+        TextBody('会话已重置，请重新提问'))
+    )
             
 """
 chatgpt 思考中的默认回应
@@ -147,11 +165,43 @@ async def openai_api(msg):
     client.send_msg(Message(msg.from_user, MESSAGE_TYPE_TEXT, chatResponse))
     await openai.aiosession.get().close()
     
+import abblity
+import json
 class UserSession:
     def __init__(self, user):
         self.user = user
         self.conversation = []
         self.createtime = time.time()
+    
+    async def handle_function(self, question, message):
+        if message.get("function_call"):
+            function_name = message["function_call"]["name"]
+
+            # Step 3, call the function
+            # Note: the JSON response from the model may not be valid JSON
+            arguments = json.loads(message["function_call"]["arguments"])
+            '''apply the function with the arguments'''
+            print('arguments:', message["function_call"]["arguments"])
+            function_response = await getattr(abblity, function_name)(**arguments, user=self.user)
+
+            # Step 4, send model the info on the function call and function response
+            second_response = await openai.ChatCompletion.acreate(
+                model="gpt-3.5-turbo-0613",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": question,
+                    },
+                    {
+                        "role": "function",
+                        "name": function_name,
+                        "content": json.dumps(function_response),
+                    },
+                ],
+                functions=abblity.functions,
+                function_call="auto"
+            )
+            return second_response.choices[0].message
 
     async def chat(self, text):
         print('会话[', self.user ,']询问:', text)
@@ -160,14 +210,29 @@ class UserSession:
             'content':text
         })
         self.createtime = time.time()
+        
+        messages = self.conversation.copy()
+        messages.append({
+            'role':'user',
+            'content':'the current time is %s' % time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        })
+        
+        # Step 1, send the user's message to the model
         completion = await openai.ChatCompletion.acreate(
-            model="gpt-3.5-turbo",
-            messages=self.conversation
+            model="gpt-3.5-turbo-0613",
+            messages= messages,
+            functions=abblity.functions,
+            function_call="auto"
         )
         print('gpt是否有返回？', completion is None)
-        self.conversation.append(completion.choices[0].message)
-        print('会话[', self.user ,']回答:', completion.choices[0].message.content)
-        return completion.choices[0].message.content
+        
+        # Step 2, handle function calls
+        message = completion.choices[0].message
+        message = await self.handle_function(text, message) or message
+        
+        self.conversation.append(message.to_dict())
+        print('会话[', self.user ,']回答:', message.content)
+        return message.content
     
     def reset(self):
         self.conversation = []
@@ -238,6 +303,7 @@ async def errorHandler(request, handler):
         await handler(request)
     except Exception as e:
         print(e)
+        traceback.print_exc()
         pass
     return web.json_response({'errcode': 0, 'errmsg': 'ok', 'encrypt': None})
 
