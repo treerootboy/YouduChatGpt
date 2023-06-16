@@ -150,30 +150,15 @@ functions.append({
 })
 from playwright.async_api import async_playwright
 import re
-async def book_meetingroom(name="某某的会议", date=time.strftime("%Y-%m-%d", time.localtime()), at=time.strftime("%H:%M", time.localtime()), duration=0.5, theme=None, user=None):
+async def book_meetingroom(name, date=time.strftime("%Y-%m-%d", time.localtime()), at=time.strftime("%H:%M", time.localtime()), duration=0.5, theme=None, user=None):
     at = next_30_minute_mark(at)
     
-    playwright = await async_playwright().start()
-    context = await playwright.chromium.launch_persistent_context(headless=HEADLESS, user_data_dir='./userdata', locale='zh-TW')
-    
-    await oa_login(context)
-    _cookies = await context.cookies()
-    cookies = {}
-    for cookie in _cookies:
-        cookies[cookie['name']] = cookie['value']
-    
-    page = await context.new_page()
-    await page.goto(f'https://oa.addcn.com/Home/Booked/index/selectDay/{date}.html')
-    _json = await page.locator('.json-data').first.text_content()
-    await context.close()
-        
-    if not _json:
+    data, cookies = await get_meetingroom_info(date)
+    if not data:
         return {
             'message': '抱歉，获取会议室列表失败，请稍后重试'
         }
     
-    data = json.loads(_json)
-    data = format_meetingroom_data(data)
     _end = minutes_to_time(time_to_minutes(at) + int(duration * 60))
     macther = re.compile(r'.*(\d{4}|贵宾|休闲).*')
     _name = macther.match(name).group(1) if macther.match(name) is not None else name
@@ -187,8 +172,7 @@ async def book_meetingroom(name="某某的会议", date=time.strftime("%Y-%m-%d"
         return {
             'message': f'抱歉，{name}在{date} {at}到{date} {_end}已经被预定了，请选择其他时间段或其他会议室'
         }
-    
-    response = requests.post('https://oa.addcn.com/Home/Booked/booking', cookies=cookies, data={
+    booking_data = {
         "meeting_theme": theme or f"{user}的会议",
         "is_video": "0",
         "peopleNum": 2,
@@ -197,13 +181,41 @@ async def book_meetingroom(name="某某的会议", date=time.strftime("%Y-%m-%d"
         "user":"",
         "area": [k for k, v in get_room().items() if macther.match(v['room_name']).group(1) == _name][0],
         "day": date
-    })
+    }
+    response = requests.post('https://oa.addcn.com/Home/Booked/booking', cookies=cookies, data=booking_data)
     booking_result = response.json()
     
-    
     return {
+        'booking_data': {
+            'theme': theme,
+            'name': name,
+            'date': date,
+            'at': at,
+            'duration': duration,
+        },
         'message': booking_result['msg']
     }
+
+async def get_meetingroom_info(date):
+    playwright = await async_playwright().start()
+    context = await playwright.chromium.launch_persistent_context(headless=HEADLESS, user_data_dir='./userdata', locale='zh-TW')
+    
+    await oa_login(context)
+    _cookies = await context.cookies()
+    cookies = {}
+    for cookie in _cookies:
+        cookies[cookie['name']] = cookie['value']
+    
+    page = await context.new_page()
+    await page.goto(f'https://oa.addcn.com/Home/Booked/index/selectDay/{date}.html')
+    _json = await page.locator('.json-data').first.text_content()
+    await context.close()
+    
+    data = None
+    if _json:
+        data = format_meetingroom_data(json.loads(_json))
+    
+    return (data, cookies)
 
 # 下一个30分钟的时间点
 def next_30_minute_mark(time_str):
@@ -249,3 +261,45 @@ def get_time_slot():
 def get_room():
     return {"2":{"room_name":"会议室1202","room_limit":6},"3":{"room_name":"会议室1203","room_limit":6},"4":{"room_name":"会议室1204","room_limit":6},"5":{"room_name":"会议1205","room_limit":18},"6":{"room_name":"休闲区12楼","room_limit":9},"7":{"room_name":"会议室1301","room_limit":6},"8":{"room_name":"会议室1302","room_limit":4},"9":{"room_name":"会议室1303","room_limit":6},"10":{"room_name":"会议室1304","room_limit":12},"11":{"room_name":"休闲区13楼","room_limit": 9 },"12":{"room_name":"贵宾室","room_limit":8}}
         
+# https://oa.addcn.com/Home/Booked/delete
+# booked_id=59306
+# {state: "1", msg: "删除成功"}
+# 取消会议室
+functions.append({
+    "name": "cancel_meetingroom_booking",
+    "description": "cancel meetingroom booking",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "booking room name",
+            },
+            "date": {
+                "type": "string",
+                "description": "booking date, default is today, format is YYYY-MM-DD",
+            },
+            "at": {
+                "type": "string",
+                "description": "booking time",
+            }
+        },
+        "required": ["at","name"],
+    }
+})
+async def cancel_meetingroom_booking(name, at, date=time.strftime("%Y-%m-%d", time.localtime()), user=None):
+    macther = re.compile(r'.*(\d{4}|贵宾|休闲).*')
+    _name = macther.match(name).group(1) if macther.match(name) is not None else name
+    
+    data, cookies = await get_meetingroom_info(date)
+    booking = [booking for booking in data if macther.match(booking['room_name']).group(1) == _name and booking['start'] == at]
+    if len(booking) == 0:
+        return '抱歉，没有找到符合条件的会议室预定'
+    booked_id = booking[0]['id']
+    response = requests.post('https://oa.addcn.com/Home/Booked/delete', cookies=cookies, data={
+        "booked_id": booked_id
+    })
+    _json = response.json()
+    return {
+        'message':_json['msg']
+    }

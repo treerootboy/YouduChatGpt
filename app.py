@@ -170,7 +170,10 @@ import json
 class UserSession:
     def __init__(self, user):
         self.user = user
-        self.conversation = []
+        self.conversation = [{
+            'role':'user',
+            'content':'无论任何情况下请都使用中文回答问题，除非专业术语不需要翻译'
+        }]
         self.createtime = time.time()
     
     async def handle_function(self, question, message):
