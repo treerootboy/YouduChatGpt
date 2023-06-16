@@ -6,6 +6,9 @@ RUN chmod +x /tini
 WORKDIR /www
 COPY requirements.txt requirements.txt
 RUN pip3 install -r requirements.txt
+COPY plugins/auditscript/requirements.txt plugins/auditscript/requirements.txt
+RUN ls plugins/*/requirements.txt | xargs pip install -r 
+RUN playwright install
 COPY . /www
 CMD [ "python3", "app.py" ]
 

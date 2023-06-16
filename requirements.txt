@@ -4,3 +4,4 @@ requests_toolbelt
 aiohttp
 revChatGPT
 openai==0.27.0
+environs
