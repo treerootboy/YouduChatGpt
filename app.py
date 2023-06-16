@@ -181,6 +181,7 @@ class UserSession:
             # Note: the JSON response from the model may not be valid JSON
             arguments = json.loads(message["function_call"]["arguments"])
             '''apply the function with the arguments'''
+            print('function_name:', function_name)
             print('arguments:', message["function_call"]["arguments"])
             function_response = await getattr(abblity, function_name)(**arguments, user=self.user)
 
@@ -197,11 +198,10 @@ class UserSession:
                         "name": function_name,
                         "content": json.dumps(function_response),
                     },
-                ],
-                functions=abblity.functions,
-                function_call="auto"
+                ]
             )
             return second_response.choices[0].message
+        
 
     async def chat(self, text):
         print('会话[', self.user ,']询问:', text)
@@ -217,11 +217,13 @@ class UserSession:
             'content':'the current time is %s' % time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         })
         
+        functions = FunctionPermission.get(self.user)
+        
         # Step 1, send the user's message to the model
         completion = await openai.ChatCompletion.acreate(
             model="gpt-3.5-turbo-0613",
             messages= messages,
-            functions=abblity.functions,
+            functions=functions,
             function_call="auto"
         )
         print('gpt是否有返回？', completion is None)
@@ -241,7 +243,15 @@ class UserSession:
     @classmethod
     def get(cls, user):
         return SessionCollection.getInstance().get(user)
-        
+
+'''function 权限管理，根据不同用户给出不同权限'''
+class FunctionPermission:
+    @classmethod
+    def get(cls, user):
+        need_whitelist = ['get_audit_accounts']
+        if user == 0000:
+            return abblity.functions
+        return [func for func in abblity.functions if func['name'] not in need_whitelist]
 
 class SessionCollection(dict):
     def __init__(self):

@@ -94,19 +94,6 @@ async def get_audit_accounts(user=None):
         'accounts_file': auditaccount.run().get('accounts_file'),
         'message': f'成功获取账号列表，已发送至您的邮箱，请注意查收，文件名是：{_file}'
     }
-
-functions.append({
-    "name": "what_time",
-    "description": "What time is it now?",
-    "parameters": {
-        "type": "object",
-        "properties": {}
-    }
-})
-async def what_time(user=None):
-    return {
-        'now': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    }
     
 functions.append({
     "name": "get_staff_info",
@@ -133,7 +120,7 @@ async def get_staff_info(name, user=None):
 # 定会议室
 functions.append({
     "name": "book_meetingroom",
-    "description": "order meeting room, and datetime use function 'what_time' to get current time",
+    "description": "order meeting room",
     "parameters": {
         "type": "object",
         "properties": {
