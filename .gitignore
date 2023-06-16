@@ -1,5 +1,8 @@
 # User-specific files
 userdata
+/index.json
+/launch.json
+
 
 
 # Byte-compiled / optimized / DLL files
