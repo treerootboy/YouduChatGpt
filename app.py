@@ -9,6 +9,7 @@ from entapp.aes import AESCrypto
 from entapp.aes import generate_signature
 from entapp.utils import *
 import time
+import datetime
 import os
 
 from environs import Env
@@ -176,6 +177,11 @@ class UserSession:
         }]
         self.createtime = time.time()
     
+    def auto_select_model(self, messages, functions=None):
+        messages = messages.copy()
+        messages.extend(functions or [])
+        return abblity.auto_select_model(messages)
+    
     async def handle_function(self, question, message):
         if message.get("function_call"):
             function_name = message["function_call"]["name"]
@@ -187,21 +193,24 @@ class UserSession:
             print('function_name:', function_name)
             print('arguments:', message["function_call"]["arguments"])
             function_response = await getattr(abblity, function_name)(**arguments, user=self.user)
+            
 
             # Step 4, send model the info on the function call and function response
+            messages = [
+                {
+                    "role": "user",
+                    "content": question,
+                },
+                {
+                    "role": "function",
+                    "name": function_name,
+                    "content": json.dumps(function_response),
+                },
+            ]
+            model = self.auto_select_model(messages)
             second_response = await openai.ChatCompletion.acreate(
-                model="gpt-3.5-turbo-0613",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": question,
-                    },
-                    {
-                        "role": "function",
-                        "name": function_name,
-                        "content": json.dumps(function_response),
-                    },
-                ]
+                model=model,
+                messages=messages
             )
             return second_response.choices[0].message
         
@@ -213,18 +222,24 @@ class UserSession:
             'content':text
         })
         self.createtime = time.time()
+        # 输出timezone +8时间
+        beijing_time = abblity.current_time()
         
         messages = self.conversation.copy()
-        messages.append({
-            'role':'user',
-            'content':'the current time is %s' % time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        messages.insert(-1, {
+            'role':'system',
+            'content': f'现在时间是{beijing_time}'
         })
         
         functions = FunctionPermission.get(self.user)
         
+        model = self.auto_select_model(messages, functions)
+        
+        print('model:', model, 'functions:', functions, 'messages:', messages)
+        
         # Step 1, send the user's message to the model
         completion = await openai.ChatCompletion.acreate(
-            model="gpt-3.5-turbo-0613",
+            model=model,
             messages= messages,
             functions=functions,
             function_call="auto"

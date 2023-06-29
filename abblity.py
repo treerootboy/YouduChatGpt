@@ -1,7 +1,19 @@
+'''
+TODO:
+[ ] 会议室预定算法优化
+    - 思路：
+      1. 将预定时段按每半小时拆分，得到一个时段列表，时段序号为key，时段开始时间、结束时间、是否已预定为value
+      2. 通过全时段的dict.update方法更新已预定的时段
+      3. 创建一个会议室对象，包含会议室名称、容纳人数、时段列表，提供预定方法、取消预定方法、获取可用时段方法
+'''
+
+import datetime
+from functools import wraps
 import time
 import openai
 import json
 import requests
+import pandas as pd
 
 import entapp.client as app
 from entapp.message import *
@@ -25,6 +37,65 @@ WORK_PASSWORD = env.str('WORK_PASSWORD')
 
 client = app.AppClient(YOUDU_BUIN, YOUDU_APP_ID, YOUDU_AES_KEY, YOUDU_ADDRESS)
 
+# 写一个输出方法返回值的装饰器，要显示实际调用的方法名
+def print_result(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        result = await func(*args, **kwargs)
+        print(f'调用方法：{func.__name__}，返回值：{result}')
+        return result
+    return wrapper
+
+def current_time():
+    now = datetime.datetime.utcnow()+datetime.timedelta(hours=8)
+    beijing_tz = datetime.timezone(datetime.timedelta(hours=8))
+    beijing_time = now.astimezone(beijing_tz)
+    return beijing_time.isoformat()
+
+def auto_select_model(messages):
+    tokens = num_tokens(messages)
+    print('tokens number is ',tokens)
+    if tokens > 16384:
+        return "gpt-4-32k"
+    elif tokens > 4096:
+        return "gpt-3.5-turbo-16k"
+    else:
+        return "gpt-3.5-turbo-0613"
+
+import tiktoken
+def num_tokens(messages, model="gpt-3.5-turbo-0301"):
+    """Returns the number of tokens used by a list of messages."""
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+    except KeyError:
+        print("Warning: model not found. Using cl100k_base encoding.")
+        encoding = tiktoken.get_encoding("cl100k_base")
+    if model == "gpt-3.5-turbo":
+        print("Warning: gpt-3.5-turbo may change over time. Returning num tokens assuming gpt-3.5-turbo-0301.")
+        return num_tokens(messages, model="gpt-3.5-turbo-0301")
+    elif model == "gpt-4":
+        print("Warning: gpt-4 may change over time. Returning num tokens assuming gpt-4-0314.")
+        return num_tokens(messages, model="gpt-4-0314")
+    elif model == "gpt-3.5-turbo-0301":
+        tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
+        tokens_per_name = -1  # if there's a name, the role is omitted
+    elif model == "gpt-4-0314":
+        tokens_per_message = 3
+        tokens_per_name = 1
+    else:
+        raise NotImplementedError(f"""num_tokens() is not implemented for model {model}. See https://github.com/openai/openai-python/blob/main/chatml.md for information on how messages are converted to tokens.""")
+    num_tokens = 0
+    for message in messages:
+        num_tokens += tokens_per_message
+        for key, value in message.items():
+            num_tokens += len(encoding.encode(value if not is_instance(value, dict) else json.dumps(value)))
+            if key == "name":
+                num_tokens += tokens_per_name
+    num_tokens += 3  # every reply is primed with <|start|>assistant<|message|>
+    return num_tokens
+
+
+
 functions = []
 
 functions.append({
@@ -42,6 +113,7 @@ functions.append({
         "required": ["location"],
     },
 })
+@print_result
 async def get_current_weather(location="shenzhen", unit="celsius", user=None):
     
     # 翻译成英文
@@ -79,6 +151,7 @@ functions.append({
 })
 from plugins.auditscript import auditaccount
 import uuid
+@print_result
 async def get_audit_accounts(user=None):
     if user is None or user == '':
         raise Exception('user is empty')
@@ -109,6 +182,7 @@ functions.append({
         "required": ["name"],
     }
 })
+@print_result
 async def get_staff_info(name, user=None):
     if user is None or user == '':
         raise Exception('user is empty')
@@ -150,6 +224,7 @@ functions.append({
 })
 from playwright.async_api import async_playwright
 import re
+@print_result
 async def book_meetingroom(name, date=time.strftime("%Y-%m-%d", time.localtime()), at=time.strftime("%H:%M", time.localtime()), duration=0.5, theme=None, user=None):
     at = next_30_minute_mark(at)
     
@@ -287,7 +362,8 @@ functions.append({
         "required": ["at","name"],
     }
 })
-async def cancel_meetingroom_booking(name, at, date=time.strftime("%Y-%m-%d", time.localtime()), user=None):
+@print_result
+async def cancel_meetingroom_booking(name, at, date=current_time(), user=None):
     macther = re.compile(r'.*(\d{4}|贵宾|休闲).*')
     _name = macther.match(name).group(1) if macther.match(name) is not None else name
     
@@ -303,3 +379,42 @@ async def cancel_meetingroom_booking(name, at, date=time.strftime("%Y-%m-%d", ti
     return {
         'message':_json['msg']
     }
+    
+functions.append({
+    "name": "get_meetingroom_booking",
+    "description": "get meetingroom booking",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "date": {
+                "type": "string",
+                "description": "booking date, default is today, format is YYYY-MM-DD",
+            }
+        },
+        "required": [],
+    }
+})
+@print_result
+async def get_meetingroom_booking(date=current_time(), user=None):
+    booking_date = date[:10]
+    bookings = await get_meetingroom_info(booking_date)
+    setting_meetingrooms = get_room()
+    setting_booking_timeslots = get_time_slot()
+    
+    for room in setting_meetingrooms.values():
+        room['bookings'] = [{'start':booking['start'], 'end':booking['end']} for booking in bookings if booking['room_name'] == room['room_name']]
+        room['available_timeslots'] = [timeslot for timeslot in setting_booking_timeslots if not is_time_overlap(timeslot['start'], timeslot['end'], room['bookings'][0]['start'], room['bookings'][0]['end'])]
+    
+    return {
+        
+    }
+
+'''
+目前有时段09:00-21:00，时段按每半小时拆分，格式为[{"start":"09:00", "end":"09:30"}]， 写一个方法，传入一个时段的开始和结束时间，计算出与这个时段不重叠的时段列表
+'''
+def get_available_timeslots(timeslots, start, end):
+    available_timeslots = []
+    for timeslot in timeslots:
+        if not is_time_overlap(start, end, timeslot['start'], timeslot['end']):
+            available_timeslots.append(timeslot)
+    return available_timeslots
